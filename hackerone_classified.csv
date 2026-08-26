@@ -1,0 +1,2 @@
+url,platform,status,reason_code,reason,response_pct,bounty_eligible
+https://hackerone.com/99f64a0d-49bd-4049-a9ee-f72089073500/embedded_submissions/new,hackerone,dead,scope_filter_unverified_treated_dead,Filter verification failed (filter_dropdown_not_found); conservatively classified as dead,,False

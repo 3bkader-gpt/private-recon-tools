@@ -1,0 +1,5 @@
+playwright>=1.40.0
+httpx>=0.25.0
+rich>=13.7.0
+pydantic>=2.5.0
+beautifulsoup4>=4.12.0

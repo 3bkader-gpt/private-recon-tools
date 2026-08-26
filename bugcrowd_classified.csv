@@ -1,0 +1,4 @@
+url,platform,status,reason_code,reason,response_pct,bounty_eligible
+https://bugcrowd.com/005f0438-82c5-4cdb-bb86-28b02984b922/external/report,bugcrowd,dead,bugcrowd_engagement_not_live,Bugcrowd dead signal: 'this engagement is not live',,
+https://bugcrowd.com/00d98f59-0a10-411a-ac78-8844be89e983/external/report,bugcrowd,dead,bugcrowd_engagement_not_live,Bugcrowd dead signal: 'this engagement is not live',,
+https://bugcrowd.com/06bfd0dc-cd15-445a-8b2c-08bd0997013a/external/report,bugcrowd,active,active_submission_form,Active submission form (whitelisted domains only),,True
