@@ -108,16 +108,21 @@ def build_scopes_url(security_page_link: str) -> str:
 async def apply_eligible_bounty_filter(page, timeout_ms: int = 5000, retries: int = 2) -> tuple[bool, str]:
     last_reason = "unknown_filter_failure"
     dropdown_locators = (
+        "[data-testid='spec-asset-filter-eligible-for-bounty']",
+        "div:has([data-testid='field-label'] span:has-text('Bounty eligibility'))",
         "button:has-text('Bounty eligibility')",
         "[aria-label*='Bounty eligibility']",
         "button:has-text('Bounty')",
     )
     option_locators = (
+        "[role='option']:has-text('Eligible for bounty')",
+        "div:has-text('Eligible for bounty')",
         "text='Eligible for bounty'",
         "li:has-text('Eligible for bounty')",
-        "[role='option']:has-text('Eligible for bounty')",
     )
     verification_locators = (
+        "[data-testid='spec-asset-filter-eligible-for-bounty']:has-text('Eligible for bounty')",
+        ".css-1gu5kac-singleValue:has-text('Eligible for bounty')",
         "button:has-text('Eligible for bounty')",
         "text='Eligible for bounty'",
     )
@@ -135,6 +140,7 @@ async def apply_eligible_bounty_filter(page, timeout_ms: int = 5000, retries: in
                 last_reason = "filter_dropdown_not_found"
                 continue
 
+            await page.wait_for_timeout(400)
             selected = False
             for locator in option_locators:
                 loc = page.locator(locator)
@@ -195,89 +201,100 @@ async def classify_hackerone_url(
     min_response_pct: int = 100,
     filter_ineligible: bool = True,
     artifacts_dir: Optional[Path] = None,
+    max_retries: int = 2,
 ) -> Classification:
-    page = await context.new_page()
-    try:
-        await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-        if wait_ms > 0:
-            await page.wait_for_timeout(wait_ms)
+    for attempt in range(max_retries + 1):
+        page = await context.new_page()
+        try:
+            await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+            if wait_ms > 0:
+                await page.wait_for_timeout(wait_ms)
 
-        text = await page.inner_text("body")
-        result = classify_h1_text(url, text, min_response_pct=min_response_pct)
+            text = await page.inner_text("body")
+            result = classify_h1_text(url, text, min_response_pct=min_response_pct)
 
-        if result.status == "active" and filter_ineligible:
-            security_page_link = None
-            try:
-                await page.wait_for_selector("text=Security Page", timeout=min(wait_ms + 2000, 5000))
-            except Exception:
-                pass
-
-            for selector in ["text=Security Page", "a:has-text('Security Page')", "a.daisy-link"]:
-                try:
-                    loc = page.locator(selector)
-                    if await loc.count() > 0:
-                        security_page_link = await loc.first.get_attribute("href")
-                        if security_page_link:
-                            break
-                except Exception:
+            if result.reason_code == "rate_limited":
+                if attempt < max_retries:
+                    await page.close()
+                    await asyncio.sleep(6.0 + attempt * 3.0)
                     continue
 
-            if security_page_link:
-                scopes_url = build_scopes_url(security_page_link)
-                await page.goto(scopes_url, timeout=timeout_ms, wait_until="domcontentloaded")
-                await wait_for_react_stable(page, timeout_ms=min(timeout_ms, 7000), extra_wait_ms=700)
+            if result.status == "active" and filter_ineligible:
+                security_page_link = None
+                try:
+                    await page.wait_for_selector("text=Security Page", timeout=min(wait_ms + 2000, 5000))
+                except Exception:
+                    pass
 
-                filter_ok, filter_reason = await apply_eligible_bounty_filter(page, timeout_ms=5000, retries=2)
-                scopes_text = await page.inner_text("body")
+                for selector in ["text=Security Page", "a:has-text('Security Page')", "a.daisy-link"]:
+                    try:
+                        loc = page.locator(selector)
+                        if await loc.count() > 0:
+                            security_page_link = await loc.first.get_attribute("href")
+                            if security_page_link:
+                                break
+                    except Exception:
+                        continue
 
-                if not filter_ok:
-                    fallback = classify_scopes(url, scopes_text)
-                    if fallback.status == "dead":
-                        result = Classification(
-                            url=url,
-                            status="dead",
-                            reason_code="no_bounty_eligible_assets_fallback",
-                            reason=f"{fallback.reason} (fallback after {filter_reason})",
-                            platform="hackerone",
-                            bounty_eligible=False,
-                        )
+                if security_page_link:
+                    scopes_url = build_scopes_url(security_page_link)
+                    await page.goto(scopes_url, timeout=timeout_ms, wait_until="domcontentloaded")
+                    await wait_for_react_stable(page, timeout_ms=min(timeout_ms, 7000), extra_wait_ms=800)
+
+                    filter_ok, filter_reason = await apply_eligible_bounty_filter(page, timeout_ms=5000, retries=2)
+                    scopes_text = await page.inner_text("body")
+
+                    if not filter_ok:
+                        fallback = classify_scopes(url, scopes_text)
+                        if fallback.status == "dead":
+                            result = Classification(
+                                url=url,
+                                status="dead",
+                                reason_code="no_bounty_eligible_assets_fallback",
+                                reason=f"{fallback.reason} (fallback after {filter_reason})",
+                                platform="hackerone",
+                                bounty_eligible=False,
+                            )
+                        else:
+                            if artifacts_dir:
+                                safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", url)[:80]
+                                try:
+                                    await page.screenshot(path=str(artifacts_dir / f"{safe_name}_failed.png"), full_page=True)
+                                except Exception:
+                                    pass
+                            result = Classification(
+                                url=url,
+                                status="dead",
+                                reason_code="scope_filter_unverified_treated_dead",
+                                reason=f"Filter verification failed ({filter_reason}); conservatively classified as dead",
+                                platform="hackerone",
+                                bounty_eligible=False,
+                            )
                     else:
-                        if artifacts_dir:
-                            safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", url)[:80]
-                            try:
-                                await page.screenshot(path=str(artifacts_dir / f"{safe_name}_failed.png"), full_page=True)
-                            except Exception:
-                                pass
-                        result = Classification(
-                            url=url,
-                            status="dead",
-                            reason_code="scope_filter_unverified_treated_dead",
-                            reason=f"Filter verification failed ({filter_reason}); conservatively classified as dead",
-                            platform="hackerone",
-                            bounty_eligible=False,
-                        )
+                        result = classify_scopes(url, scopes_text)
                 else:
-                    result = classify_scopes(url, scopes_text)
-            else:
-                return Classification(
-                    url=url,
-                    status="error",
-                    reason_code="security_page_missing",
-                    reason="Security Page link not found on embedded submission page",
-                    platform="hackerone",
-                )
+                    return Classification(
+                        url=url,
+                        status="error",
+                        reason_code="security_page_missing",
+                        reason="Security Page link not found on embedded submission page",
+                        platform="hackerone",
+                    )
 
-        return result
-    except Exception as exc:
-        return Classification(
-            url=url,
-            status="error",
-            reason_code="fetch_failed",
-            reason=f"{type(exc).__name__}: {str(exc)}",
-            platform="hackerone",
-        )
-    finally:
-        try:
-            await page.close()
-        except Exception:
-            pass
+            return result
+        except Exception as exc:
+            if attempt < max_retries and ("rate" in str(exc).lower() or "timeout" in str(exc).lower()):
+                await asyncio.sleep(4.0)
+                continue
+            return Classification(
+                url=url,
+                status="error",
+                reason_code="fetch_failed",
+                reason=f"{type(exc).__name__}: {str(exc)}",
+                platform="hackerone",
+            )
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
